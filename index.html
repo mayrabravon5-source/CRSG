@@ -1,0 +1,1099 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Gestiones INE - 35 Junta Distrital Estado de México</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        ineGray: '#828A91',
+                        ineGold: '#C5A989',
+                        ineOxford: '#212529',
+                        ineDark: '#121417',
+                        ineLight: '#F8F9FA'
+                    }
+                }
+            }
+        }
+    </script>
+    <!-- Font Inter & FontAwesome -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #828A91; border-radius: 3px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #C5A989; }
+    </style>
+</head>
+<body class="h-full bg-ineLight text-ineOxford flex flex-col antialiased">
+
+    <div id="app" class="flex-1 flex flex-col min-h-0">
+        <!-- Main dynamic view injected here -->
+    </div>
+
+    <!-- Global Modal Notification Component -->
+    <div id="modalContainer" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm hidden">
+        <div id="modalBox" class="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border-t-4 border-ineGold transform transition-all">
+            <div class="flex items-center space-x-3 mb-4">
+                <div id="modalIcon" class="w-10 h-10 rounded-full flex items-center justify-center text-white bg-ineOxford">
+                    <i class="fa-solid fa-info"></i>
+                </div>
+                <h3 id="modalTitle" class="text-lg font-bold text-ineOxford">Aviso del Sistema</h3>
+            </div>
+            <p id="modalMessage" class="text-gray-600 text-sm mb-6 leading-relaxed"></p>
+            <div id="modalActions" class="flex justify-end space-x-3">
+                <button onclick="closeModal()" class="px-5 py-2 bg-ineOxford text-white text-sm font-medium rounded-lg hover:bg-black transition-all">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc, onSnapshot, query, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'ine-35-gestiones-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyC6Ygfb4bEgJuIhNeXkI03uODeJ5npXleM",
+            authDomain: "gestiones-4e76b.firebaseapp.com",
+            databaseURL: "https://gestiones-4e76b-default-rtdb.firebaseio.com",
+            projectId: "gestiones-4e76b",
+            storageBucket: "gestiones-4e76b.firebasestorage.app",
+            messagingSenderId: "333996277003",
+            appId: "1:333996277003:web:0b5ad2ba6129adc91b760e",
+            measurementId: "G-TM8T2JE2N6"
+        };
+
+        let app, db, auth;
+        let currentUser = null;
+        let gestionesList = [];
+        let usuariosList = [];
+        let unsubscribeGestiones = null;
+        let unsubscribeUsuarios = null;
+
+        const MUNICIPIOS_INE_35 = [
+            "Coatepec Harinas", "Ixtapan de la Sal", "Joquicingo", 
+            "Malinalco", "Ocuilan", "Rayón", "Tenancingo", 
+            "Tenango del Valle", "Tonatico", "Villa Guerrero", "Zumpahuacán"
+        ];
+
+        window.showModal = function(title, message, type = 'info', onConfirm = null) {
+            const modalContainer = document.getElementById('modalContainer');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalMessage = document.getElementById('modalMessage');
+            const modalBox = document.getElementById('modalBox');
+            const modalIcon = document.getElementById('modalIcon');
+            const modalActions = document.getElementById('modalActions');
+
+            modalTitle.innerText = title;
+            modalMessage.innerText = message;
+
+            if (type === 'success') {
+                modalIcon.className = 'w-10 h-10 rounded-full flex items-center justify-center text-white bg-emerald-600';
+                modalIcon.innerHTML = '<i class="fa-solid fa-check"></i>';
+                modalBox.className = 'bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border-t-4 border-emerald-600 transform transition-all';
+            } else if (type === 'error') {
+                modalIcon.className = 'w-10 h-10 rounded-full flex items-center justify-center text-white bg-red-600';
+                modalIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
+                modalBox.className = 'bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border-t-4 border-red-600 transform transition-all';
+            } else if (type === 'warning') {
+                modalIcon.className = 'w-10 h-10 rounded-full flex items-center justify-center text-white bg-amber-500';
+                modalIcon.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i>';
+                modalBox.className = 'bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border-t-4 border-amber-500 transform transition-all';
+            } else {
+                modalIcon.className = 'w-10 h-10 rounded-full flex items-center justify-center text-white bg-ineOxford';
+                modalIcon.innerHTML = '<i class="fa-solid fa-info"></i>';
+                modalBox.className = 'bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 p-6 border-t-4 border-ineGold transform transition-all';
+            }
+
+            if (onConfirm) {
+                modalActions.innerHTML = `
+                    <button onclick="closeModal()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-medium rounded-lg transition-all">Cancelar</button>
+                    <button id="modalConfirmBtn" class="px-5 py-2 bg-ineOxford text-white text-sm font-medium rounded-lg hover:bg-black transition-all">Confirmar</button>
+                `;
+                document.getElementById('modalConfirmBtn').onclick = function() {
+                    closeModal();
+                    onConfirm();
+                };
+            } else {
+                modalActions.innerHTML = `
+                    <button onclick="closeModal()" class="px-5 py-2 bg-ineOxford text-white text-sm font-medium rounded-lg hover:bg-black transition-all">Aceptar</button>
+                `;
+            }
+
+            modalContainer.classList.remove('hidden');
+        };
+
+        window.closeModal = function() {
+            document.getElementById('modalContainer').classList.add('hidden');
+        };
+
+        async function initFirebase() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                onAuthStateChanged(auth, (user) => {
+                    currentUser = user;
+                    if (user) setupFirestoreListeners();
+                });
+            } catch (e) {
+                loadLocalFallback();
+            }
+        }
+
+        function loadLocalFallback() {
+            const localGestiones = localStorage.getItem('ine35_gestiones_backup');
+            if (localGestiones) {
+                try { gestionesList = JSON.parse(localGestiones); } catch (e) { gestionesList = []; }
+            } else {
+                gestionesList = [
+                    {
+                        id: 'gestion_demo_1',
+                        tipoDestinatario: 'Ayuntamiento',
+                        municipio: 'Tenancingo',
+                        nombreEscuela: '',
+                        cctEscuela: '',
+                        numOficio: 'INE/35JDE/MESA/001/2026',
+                        fechaEmision: '2026-01-15',
+                        fechaRecibido: '2026-01-16',
+                        destinatario: 'C. Presidente Municipal de Tenancingo',
+                        personaEntrega: 'C. Roberto Gómez Bolaños',
+                        temaGestion: 'Mamparas y Bastidores',
+                        asunto: 'Solicitud de espacios públicos para colocación de mamparas de información electoral.',
+                        tieneAcuse: true,
+                        tieneRespuesta: true,
+                        respNumOficio: 'AYUNT/TEN/2026/045',
+                        respRemite: 'Secretario del Ayuntamiento',
+                        respFecha: '2026-01-25',
+                        respDescripcion: 'Se autorizan los espacios solicitados conforme a la normatividad.',
+                        seguimientoTramite: '',
+                        capturistaNombre: 'Mayra Bravo',
+                        capturistaEmail: 'mayra.bravor@ine35.mx',
+                        fechaRegistro: '2026-01-15T10:00:00.000Z'
+                    }
+                ];
+                localStorage.setItem('ine35_gestiones_backup', JSON.stringify(gestionesList));
+            }
+
+            const localUsuarios = localStorage.getItem('ine35_usuarios_backup');
+            if (localUsuarios) {
+                try { usuariosList = JSON.parse(localUsuarios); } catch (e) { usuariosList = []; }
+            }
+            if (!usuariosList || usuariosList.length === 0) {
+                usuariosList = [
+                    { id: 'user_1', nombre: 'Mayra Bravo', loginId: 'mayra.bravor', email: 'mayra.bravor@ine35.mx', password: 'admin2026', role: 'administrador', activo: true },
+                    { id: 'user_2', nombre: 'Juan Pérez', loginId: 'juan.perez', email: 'juan.perez@ine35.mx', password: 'cap2026', role: 'capturista', activo: true }
+                ];
+                localStorage.setItem('ine35_usuarios_backup', JSON.stringify(usuariosList));
+            }
+        }
+
+        function setupFirestoreListeners() {
+            if (!db) return;
+            try {
+                const q = query(collection(db, 'artifacts', appId, 'public', 'data', 'gestiones_ine35'));
+                unsubscribeGestiones = onSnapshot(q, (snapshot) => {
+                    const cloudList = [];
+                    snapshot.forEach(docSnap => cloudList.push(docSnap.data()));
+                    if (cloudList.length > 0 || snapshot.size > 0) {
+                        gestionesList = cloudList;
+                        localStorage.setItem('ine35_gestiones_backup', JSON.stringify(gestionesList));
+                        if (document.querySelector('tbody')) renderDashboard();
+                    } else if (gestionesList.length === 0) {
+                        seedInitialCloudData();
+                    }
+                }, (error) => { loadLocalFallback(); });
+
+                const qUsers = query(collection(db, 'artifacts', appId, 'public', 'data', 'usuarios_sistema'));
+                unsubscribeUsuarios = onSnapshot(qUsers, (snapshot) => {
+                    const cloudUsers = [];
+                    snapshot.forEach(docSnap => cloudUsers.push(docSnap.data()));
+                    if (cloudUsers.length > 0) {
+                        usuariosList = cloudUsers;
+                        localStorage.setItem('ine35_usuarios_backup', JSON.stringify(usuariosList));
+                        if (currentActiveTab === 'usuarios') renderDashboard();
+                    }
+                }, (error) => {});
+            } catch (e) {
+                loadLocalFallback();
+            }
+        }
+
+        async function seedInitialCloudData() {
+            if (!db) return;
+            try {
+                const initialGestion = {
+                    id: 'gestion_demo_1',
+                    tipoDestinatario: 'Ayuntamiento',
+                    municipio: 'Tenancingo',
+                    nombreEscuela: '',
+                    cctEscuela: '',
+                    numOficio: 'INE/35JDE/MESA/001/2026',
+                    fechaEmision: '2026-01-15',
+                    fechaRecibido: '2026-01-16',
+                    destinatario: 'C. Presidente Municipal de Tenancingo',
+                    personaEntrega: 'C. Roberto Gómez Bolaños',
+                    temaGestion: 'Mamparas y Bastidores',
+                    asunto: 'Solicitud de espacios públicos para colocación de mamparas de información electoral.',
+                    tieneAcuse: true,
+                    tieneRespuesta: true,
+                    respNumOficio: 'AYUNT/TEN/2026/045',
+                    respRemite: 'Secretario del Ayuntamiento',
+                    respFecha: '2026-01-25',
+                    respDescripcion: 'Se autorizan los espacios solicitados conforme a la normatividad.',
+                    seguimientoTramite: '',
+                    capturistaNombre: 'Mayra Bravo',
+                    capturistaEmail: 'mayra.bravor@ine35.mx',
+                    fechaRegistro: '2026-01-15T10:00:00.000Z'
+                };
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gestiones_ine35', initialGestion.id), initialGestion);
+
+                const adminUser = { id: 'user_1', nombre: 'Mayra Bravo', loginId: 'mayra.bravor', email: 'mayra.bravor@ine35.mx', password: 'admin2026', role: 'administrador', activo: true };
+                const capUser = { id: 'user_2', nombre: 'Juan Pérez', loginId: 'juan.perez', email: 'juan.perez@ine35.mx', password: 'cap2026', role: 'capturista', activo: true };
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'usuarios_sistema', adminUser.id), adminUser);
+                await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'usuarios_sistema', capUser.id), capUser);
+            } catch (err) {}
+        }
+
+        function renderLogin() {
+            loadLocalFallback();
+            const appDiv = document.getElementById('app');
+            appDiv.innerHTML = `
+                <div class="flex-1 flex items-center justify-center p-4 bg-gradient-to-br from-ineDark via-ineOxford to-ineGray/20">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8 border-t-4 border-ineGold">
+                        <div class="text-center mb-8">
+                            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-ineOxford text-ineGold mb-4 shadow-lg">
+                                <i class="fa-solid fa-landmark text-2xl"></i>
+                            </div>
+                            <h1 class="text-2xl font-bold text-ineOxford">INE • México</h1>
+                            <p class="text-xs text-ineGray font-semibold uppercase tracking-widest mt-1">35 Junta Distrital Ejecutiva</p>
+                            <h2 class="text-sm font-bold text-gray-700 mt-3">Sistema de Registro y Control de Gestiones</h2>
+                        </div>
+
+                        <form onsubmit="handleLogin(event)" class="space-y-5">
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-700 mb-1">Usuario de Acceso (nombre.apellido)</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-user"></i></span>
+                                    <input type="text" id="loginUser" required placeholder="ej. mayra.bravor" class="w-full pl-10 pr-4 py-2.5 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none font-mono">
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-semibold text-gray-700 mb-1">Contraseña de Acceso</label>
+                                <div class="relative">
+                                    <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-lock"></i></span>
+                                    <input type="password" id="loginPassword" required placeholder="••••••••" class="w-full pl-10 pr-4 py-2.5 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                            </div>
+
+                            <button type="submit" class="w-full py-3 bg-ineOxford hover:bg-black text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg transition-all flex items-center justify-center space-x-2">
+                                <span>Iniciar Sesión</span>
+                                <i class="fa-solid fa-arrow-right"></i>
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.handleLogin = function(event) {
+            event.preventDefault();
+            loadLocalFallback();
+            const inputVal = document.getElementById('loginUser').value.trim().toLowerCase();
+            const pass = document.getElementById('loginPassword').value.trim();
+
+            let foundUser = usuariosList.find(u => 
+                ((u.loginId && u.loginId.toLowerCase() === inputVal) || (u.email && u.email.split('@')[0].toLowerCase() === inputVal)) && 
+                u.password === pass
+            );
+
+            if (!foundUser) {
+                if (inputVal === 'mayra.bravor' && pass === 'admin2026') {
+                    foundUser = { id: 'admin_default', nombre: 'Mayra Bravo', loginId: 'mayra.bravor', email: 'mayra.bravor@ine35.mx', role: 'administrador', activo: true };
+                }
+            }
+
+            if (foundUser) {
+                if (foundUser.activo === false) {
+                    showModal("Acceso Revocado", "Este usuario ha sido revocado por la administración distrital.", "error");
+                    return;
+                }
+                sessionStorage.setItem('ine35_logged_user', JSON.stringify(foundUser));
+                renderDashboard();
+            } else {
+                showModal("Acceso Denegado", "Usuario o contraseña incorrectos.", "error");
+            }
+        };
+
+        window.logout = function() {
+            sessionStorage.removeItem('ine35_logged_user');
+            renderLogin();
+        };
+
+        let currentActiveTab = 'dashboard';
+        let currentFilterMunicipio = '';
+        let currentFilterEstatus = '';
+        let currentFilterTipo = '';
+        let currentSearchQuery = '';
+
+        function renderDashboard() {
+            const logged = JSON.parse(sessionStorage.getItem('ine35_logged_user') || '{}');
+            if (!logged.email && !logged.loginId) {
+                renderLogin();
+                return;
+            }
+
+            const appDiv = document.getElementById('app');
+            appDiv.innerHTML = `
+                <!-- Top Header Navbar -->
+                <header class="bg-ineOxford text-white shadow-md border-b-2 border-ineGold">
+                    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-10 h-10 rounded-xl bg-ineGold text-ineOxford flex items-center justify-center font-bold text-lg shadow">
+                                <i class="fa-solid fa-landmark"></i>
+                            </div>
+                            <div>
+                                <h1 class="font-bold text-sm sm:text-base tracking-wide">35 Junta Distrital Ejecutiva</h1>
+                                <p class="text-[11px] text-ineGold font-medium">Estado de México • Sistema de Registro de Gestiones (Cloud Sync)</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center space-x-4">
+                            <div class="text-right hidden md:block">
+                                <div class="text-xs font-bold">${logged.nombre || 'Funcionario INE'}</div>
+                                <div class="text-[10px] text-ineGold uppercase font-semibold">${logged.role || 'Capturista'}</div>
+                            </div>
+                            <button onclick="logout()" class="px-3 py-1.5 bg-red-600/80 hover:bg-red-700 text-white rounded-lg text-xs font-semibold transition-all flex items-center space-x-1.5 shadow">
+                                <i class="fa-solid fa-right-from-bracket"></i>
+                                <span>Salir</span>
+                            </button>
+                        </div>
+                    </div>
+                </header>
+
+                <!-- Navigation Tabs Bar -->
+                <div class="bg-white border-b border-gray-200 shadow-sm">
+                    <div class="max-w-7xl mx-auto px-4 flex items-center justify-between overflow-x-auto">
+                        <div class="flex space-x-2 py-2">
+                            <button onclick="switchTab('dashboard')" class="px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center space-x-2 ${currentActiveTab === 'dashboard' ? 'bg-ineOxford text-white shadow' : 'bg-ineLight text-ineOxford hover:bg-gray-200'}">
+                                <i class="fa-solid fa-folder-tree"></i>
+                                <span>Gestiones Institucionales</span>
+                            </button>
+                            ${logged.role === 'administrador' ? `
+                                <button onclick="switchTab('usuarios')" class="px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center space-x-2 ${currentActiveTab === 'usuarios' ? 'bg-ineOxford text-white shadow' : 'bg-ineLight text-ineOxford hover:bg-gray-200'}">
+                                    <i class="fa-solid fa-users-gear"></i>
+                                    <span>Control de Usuarios</span>
+                                </button>
+                            ` : ''}
+                        </div>
+
+                        <div class="flex items-center space-x-2">
+                            <button onclick="exportDatabaseCSV()" class="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 shadow">
+                                <i class="fa-solid fa-file-excel"></i>
+                                <span>Exportar Base CSV</span>
+                            </button>
+                            <button onclick="openNewGestionModal()" class="px-4 py-2 bg-ineGold hover:bg-amber-600 text-ineOxford font-bold rounded-lg text-xs transition-all flex items-center space-x-1.5 shadow">
+                                <i class="fa-solid fa-plus"></i>
+                                <span>Nueva Gestión</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Main Content Area -->
+                <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 overflow-y-auto custom-scrollbar">
+                    ${currentActiveTab === 'dashboard' ? renderGestionesView() : renderUsuariosView()}
+                </main>
+            `;
+        }
+
+        window.switchTab = function(tab) {
+            currentActiveTab = tab;
+            renderDashboard();
+        };
+
+        function renderGestionesView() {
+            let filtered = gestionesList.filter(g => {
+                let matchesMun = !currentFilterMunicipio || g.municipio === currentFilterMunicipio;
+                let matchesEst = !currentFilterEstatus || g.estatus === currentFilterEstatus;
+                let matchesTipo = !currentFilterTipo || g.tipoDestinatario === currentFilterTipo;
+                let matchesQuery = !currentSearchQuery || 
+                    g.numOficio.toLowerCase().includes(currentSearchQuery.toLowerCase()) ||
+                    g.destinatario.toLowerCase().includes(currentSearchQuery.toLowerCase()) ||
+                    g.asunto.toLowerCase().includes(currentSearchQuery.toLowerCase()) ||
+                    g.municipio.toLowerCase().includes(currentSearchQuery.toLowerCase()) ||
+                    (g.nombreEscuela && g.nombreEscuela.toLowerCase().includes(currentSearchQuery.toLowerCase()));
+                return matchesMun && matchesEst && matchesTipo && matchesQuery;
+            });
+
+            const total = gestionesList.length;
+            const iniciadas = gestionesList.filter(g => g.estatus === 'Iniciadas').length;
+            const enTratite = gestionesList.filter(g => g.estatus === 'En trámite').length;
+            const concluidas = gestionesList.filter(g => g.estatus === 'Concluidas').length;
+
+            return `
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-gray-500 uppercase">Total Gestiones</div>
+                            <div class="text-2xl font-bold text-ineOxford mt-1">${total}</div>
+                        </div>
+                        <div class="w-10 h-10 rounded-full bg-ineLight text-ineOxford flex items-center justify-center font-bold">
+                            <i class="fa-solid fa-folder-open"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-amber-600 uppercase">Iniciadas</div>
+                            <div class="text-2xl font-bold text-amber-700 mt-1">${iniciadas}</div>
+                        </div>
+                        <div class="w-10 h-10 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+                            <i class="fa-solid fa-clock"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-blue-600 uppercase">En Trámite</div>
+                            <div class="text-2xl font-bold text-blue-700 mt-1">${enTratite}</div>
+                        </div>
+                        <div class="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                            <i class="fa-solid fa-spinner"></i>
+                        </div>
+                    </div>
+                    <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center justify-between">
+                        <div>
+                            <div class="text-xs font-semibold text-emerald-600 uppercase">Concluidas</div>
+                            <div class="text-2xl font-bold text-emerald-700 mt-1">${concluidas}</div>
+                        </div>
+                        <div class="w-10 h-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+                            <i class="fa-solid fa-circle-check"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-6 flex flex-col md:flex-row items-center justify-between gap-4">
+                    <div class="w-full md:w-1/3 relative">
+                        <span class="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-400"><i class="fa-solid fa-search"></i></span>
+                        <input type="text" id="searchInput" oninput="handleSearch(this.value)" placeholder="Buscar por oficio, asunto, municipio..." value="${currentSearchQuery}" class="w-full pl-10 pr-4 py-2 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none">
+                    </div>
+
+                    <div class="w-full md:w-2/3 flex flex-wrap items-center justify-end gap-2">
+                        <select id="filterMunicipio" onchange="handleFilterMunicipio(this.value)" class="py-2 px-3 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none">
+                            <option value="">Todos los Municipios (35 Distrito)</option>
+                            ${MUNICIPIOS_INE_35.map(m => `<option value="${m}" ${currentFilterMunicipio === m ? 'selected' : ''}>${m}</option>`).join('')}
+                        </select>
+
+                        <select id="filterEstatus" onchange="handleFilterEstatus(this.value)" class="py-2 px-3 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none">
+                            <option value="">Todos los Estatus</option>
+                            <option value="Iniciadas" ${currentFilterEstatus === 'Iniciadas' ? 'selected' : ''}>Iniciadas</option>
+                            <option value="En trámite" ${currentFilterEstatus === 'En trámite' ? 'selected' : ''}>En trámite</option>
+                            <option value="Concluidas" ${currentFilterEstatus === 'Concluidas' ? 'selected' : ''}>Concluidas</option>
+                        </select>
+
+                        <select id="filterTipo" onchange="handleFilterTipo(this.value)" class="py-2 px-3 bg-ineLight border border-gray-300 rounded-xl text-xs focus:ring-2 focus:ring-ineGold focus:outline-none">
+                            <option value="">Todos los Destinatarios</option>
+                            <option value="Ayuntamiento" ${currentFilterTipo === 'Ayuntamiento' ? 'selected' : ''}>Ayuntamiento</option>
+                            <option value="Escuela" ${currentFilterTipo === 'Escuela' ? 'selected' : ''}>Escuela</option>
+                            <option value="Institución" ${currentFilterTipo === 'Institución' ? 'selected' : ''}>Institución</option>
+                            <option value="Otro" ${currentFilterTipo === 'Otro' ? 'selected' : ''}>Otro</option>
+                        </select>
+
+                        ${(currentFilterMunicipio || currentFilterEstatus || currentFilterTipo || currentSearchQuery) ? `
+                            <button onclick="clearFilters()" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl text-xs font-bold transition-all" title="Limpiar Filtros">
+                                <i class="fa-solid fa-filter-circle-xmark"></i>
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+
+                <!-- Gestiones Table Card -->
+                <div class="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-ineOxford text-white text-[11px] uppercase tracking-wider">
+                                    <th class="py-3 px-4 font-bold">No. Oficio / Fecha</th>
+                                    <th class="py-3 px-4 font-bold">Municipio / Destinatario</th>
+                                    <th class="py-3 px-4 font-bold">Tema / Asunto</th>
+                                    <th class="py-3 px-4 font-bold text-center">Estatus</th>
+                                    <th class="py-3 px-4 font-bold text-center">Acuse / Resp.</th>
+                                    <th class="py-3 px-4 font-bold text-right">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200 text-xs">
+                                ${filtered.length === 0 ? `
+                                    <tr>
+                                        <td colspan="6" class="py-12 text-center text-gray-500">
+                                            <div class="flex flex-col items-center justify-center space-y-2">
+                                                <i class="fa-solid fa-folder-open text-3xl text-gray-300"></i>
+                                                <p class="font-medium">No se encontraron gestiones registradas con los filtros actuales.</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ` : filtered.map(g => `
+                                    <tr class="hover:bg-ineLight/60 transition-all">
+                                        <td class="py-3 px-4">
+                                            <div class="font-bold text-ineOxford">${g.numOficio}</div>
+                                            <div class="text-[10px] text-gray-500 mt-0.5"><i class="fa-regular fa-calendar"></i> ${g.fechaEmision}</div>
+                                        </td>
+                                        <td class="py-3 px-4">
+                                            <div class="font-semibold text-gray-800">${g.municipio}</div>
+                                            <div class="text-[10px] text-ineGray mt-0.5">${g.tipoDestinatario}: ${g.destinatario}</div>${g.nombreEscuela ? `<div class="text-[10px] text-blue-600 font-medium">Escuela: ${g.nombreEscuela}</div>` : ''}
+                                        </td>
+                                        <td class="py-3 px-4 max-w-xs">
+                                            <div class="font-bold text-ineOxford text-[11px]">${g.temaGestion}</div>
+                                            <div class="text-gray-600 truncate mt-0.5" title="${g.asunto}">${g.asunto}</div>${g.estatus === 'En trámite' && g.seguimientoTramite ? `<div class="text-[10px] text-blue-700 italic mt-1 truncate" title="Seguimiento: ${g.seguimientoTramite}"><i class="fa-solid fa-timeline mr-1"></i>Seguimiento: ${g.seguimientoTramite}</div>` : ''}
+                                        </td>
+                                        <td class="py-3 px-4 text-center">
+                                            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold inline-block
+                                                ${g.estatus === 'Concluidas' ? 'bg-emerald-100 text-emerald-800' : (g.estatus === 'En trámite' ? 'bg-blue-100 text-blue-800' : 'bg-amber-100 text-amber-800')}">
+                                                ${g.estatus}
+                                            </span>
+                                        </td>
+                                        <td class="py-3 px-4 text-center">
+                                            <div class="flex flex-col items-center space-y-1">
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold ${g.tieneAcuse ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-gray-100 text-gray-500'}">
+                                                    ${g.tieneAcuse ? 'Con Acuse' : 'Sin Acuse'}
+                                                </span>
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-semibold ${g.tieneRespuesta ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-gray-100 text-gray-500'}">
+                                                    ${g.tieneRespuesta ? 'Con Respuesta' : 'Pendiente Resp.'}
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td class="py-3 px-4 text-right">
+                                            <div class="inline-flex items-center space-x-1">
+                                                <button onclick="viewGestionDetail('${g.id}')" class="p-1.5 bg-gray-100 hover:bg-ineOxford hover:text-white text-gray-700 rounded-lg transition-all" title="Ver Detalle">
+                                                    <i class="fa-solid fa-eye text-xs"></i>
+                                                </button>
+                                                <button onclick="openEditGestionModal('${g.id}')" class="p-1.5 bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-700 rounded-lg transition-all" title="Editar Gestión">
+                                                    <i class="fa-solid fa-pen-to-square text-xs"></i>
+                                                </button>
+                                                <button onclick="confirmDeleteGestion('${g.id}')" class="p-1.5 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 rounded-lg transition-all" title="Eliminar">
+                                                    <i class="fa-solid fa-trash text-xs"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bg-ineLight px-4 py-3 border-t border-gray-200 text-xs text-gray-500 flex items-center justify-between">
+                        <span>Mostrando <strong>${filtered.length}</strong> de <strong>${gestionesList.length}</strong> gestiones totales</span>
+                        <span class="text-[11px] text-ineGold font-semibold">35 Junta Distrital Ejecutiva • INE Estado de México</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.handleSearch = function(val) { currentSearchQuery = val; renderDashboard(); };
+        window.handleFilterMunicipio = function(val) { currentFilterMunicipio = val; renderDashboard(); };
+        window.handleFilterEstatus = function(val) { currentFilterEstatus = val; renderDashboard(); };
+        window.handleFilterTipo = function(val) { currentFilterTipo = val; renderDashboard(); };
+        window.clearFilters = function() {
+            currentFilterMunicipio = '';
+            currentFilterEstatus = '';
+            currentFilterTipo = '';
+            currentSearchQuery = '';
+            renderDashboard();
+        };
+
+        // ==========================================
+        // VISTA DE CONTROL DE USUARIOS Y CREDENCIALES
+        // ==========================================
+        function renderUsuariosView() {
+            const logged = JSON.parse(sessionStorage.getItem('ine35_logged_user') || '{}');
+            if (logged.role !== 'administrador') return '<div class="p-8 text-center text-red-600 font-bold">Acceso restringido a Administradores Distritales.</div>';
+
+            loadLocalFallback();
+
+            return `
+                <div class="bg-white rounded-xl border border-gray-200 shadow-sm p-6 mb-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 class="text-base font-bold text-ineOxford">Control de Usuarios y Credenciales</h3>
+                            <p class="text-xs text-gray-500">Gestione las cuentas institucionales del personal de la 35 Junta Distrital.</p>
+                        </div>
+                        <button onclick="openNewUserModal()" class="px-4 py-2 bg-ineOxford hover:bg-black text-white rounded-xl text-xs font-bold transition-all shadow">
+                            <i class="fa-solid fa-user-plus mr-1.5"></i> Nueva Credencial
+                        </button>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-xs">
+                            <thead>
+                                <tr class="bg-ineLight text-ineOxford uppercase text-[10px] font-bold border-b border-gray-200">
+                                    <th class="py-3 px-4">Funcionario (Usuario)</th>
+                                    <th class="py-3 px-4">Usuario de Ingreso (nombre.apellido)</th>
+                                    <th class="py-3 px-4">Contraseña</th>
+                                    <th class="py-3 px-4">Rol</th>
+                                    <th class="py-3 px-4 text-center">Estatus</th>
+                                    <th class="py-3 px-4 text-right">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-100">
+                                ${usuariosList.map(u => `
+                                    <tr class="hover:bg-ineLight/50">
+                                        <td class="py-3 px-4 font-bold text-ineOxford">${u.nombre}</td>
+                                        <td class="py-3 px-4 text-gray-600 font-mono">${u.loginId || u.email.split('@')[0]}</td>
+                                        <td class="py-3 px-4 text-gray-400 font-mono tracking-widest">••••••••••••</td>
+                                        <td class="py-3 px-4">
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${u.role === 'administrador' ? 'bg-ineGold/20 text-ineOxford' : 'bg-gray-100 text-gray-700'}">
+                                                ${u.role.toUpperCase()}
+                                            </span>
+                                        </td>
+                                        <td class="py-3 px-4 text-center">
+                                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${u.activo !== false ? 'bg-emerald-100 text-emerald-800' : 'bg-red-100 text-red-800'}">
+                                                ${u.activo !== false ? 'Activo' : 'Revocado'}
+                                            </span>
+                                        </td>
+                                        <td class="py-3 px-4 text-right">
+                                            <div class="inline-flex space-x-2">
+                                                <button onclick="toggleUserStatus('${u.id}')" class="px-2.5 py-1 rounded text-[10px] font-bold transition-all ${u.activo !== false ? 'bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-600 hover:text-white'}">
+                                                    ${u.activo !== false ? 'Revocar' : 'Activar'}
+                                                </button>
+                                                <button onclick="deleteUserCredential('${u.id}')" class="px-2.5 py-1 bg-red-50 hover:bg-red-600 hover:text-white text-red-700 rounded text-[10px] font-bold transition-all" title="Eliminar definitivamente">
+                                                    <i class="fa-solid fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.openNewUserModal = function() {
+            const modalHTML = `
+                <div id="userFormModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6 border-t-4 border-ineGold">
+                        <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-200">
+                            <h3 class="text-base font-bold text-ineOxford">Alta de Nueva Credencial</h3>
+                            <button onclick="closeUserModal()" class="text-gray-400 hover:text-gray-700"><i class="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <form onsubmit="saveNewUser(event)" class="space-y-4 text-xs">
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">Nombre del Funcionario *</label>
+                                <input type="text" id="newUserName" required placeholder="ej. Mayra Bravo" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">Usuario de Acceso (nombre.apellido) *</label>
+                                <input type="text" id="newUserLoginId" required placeholder="ej. mayra.bravor" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl font-mono">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">Contraseña *</label>
+                                <input type="text" id="newUserPassword" required placeholder="Contraseña sencilla" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl font-mono">
+                            </div>
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">Rol *</label>
+                                <select id="newUserRole" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl">
+                                    <option value="administrador">Administrador</option>
+                                    <option value="capturista">Capturista</option>
+                                </select>
+                            </div>
+                            <div class="flex justify-end space-x-3 pt-3 border-t border-gray-200">
+                                <button type="button" onclick="closeUserModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl font-bold">Cancelar</button>
+                                <button type="submit" class="px-5 py-2 bg-ineOxford text-white rounded-xl font-bold shadow">Guardar Credencial</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            const div = document.createElement('div');
+            div.id = 'modalUserWrapper';
+            div.innerHTML = modalHTML;
+            document.body.appendChild(div);
+        };
+
+        window.closeUserModal = function() {
+            const wrapper = document.getElementById('modalUserWrapper');
+            if (wrapper) wrapper.remove();
+        };
+
+        window.saveNewUser = function(event) {
+            event.preventDefault();
+            loadLocalFallback();
+            const loginIdClean = document.getElementById('newUserLoginId').value.trim().toLowerCase();
+            const newUser = {
+                id: 'user_' + Date.now(),
+                nombre: document.getElementById('newUserName').value.trim(),
+                loginId: loginIdClean,
+                email: loginIdClean + '@ine35.mx',
+                password: document.getElementById('newUserPassword').value.trim(),
+                role: document.getElementById('newUserRole').value,
+                activo: true
+            };
+
+            usuariosList.push(newUser);
+            localStorage.setItem('ine35_usuarios_backup', JSON.stringify(usuariosList));
+
+            closeUserModal();
+            showModal("Éxito", "La nueva credencial ha sido dada de alta correctamente.", "success");
+            renderDashboard();
+        };
+
+        window.toggleUserStatus = function(id) {
+            loadLocalFallback();
+            const u = usuariosList.find(user => user.id === id);
+            if (u) {
+                u.activo = !u.activo;
+                localStorage.setItem('ine35_usuarios_backup', JSON.stringify(usuariosList));
+                renderDashboard();
+                showModal("Actualizado", "Estatus de la credencial modificado.", "success");
+            }
+        };
+
+        window.deleteUserCredential = function(id) {
+            showModal("Confirmar Baja", "¿Está seguro de eliminar definitivamente esta credencial?", "warning", () => {
+                loadLocalFallback();
+                usuariosList = usuariosList.filter(user => user.id !== id);
+                localStorage.setItem('ine35_usuarios_backup', JSON.stringify(usuariosList));
+                renderDashboard();
+                showModal("Eliminado", "La credencial ha sido dada de baja del sistema.", "success");
+            });
+        };
+
+        // ==========================================
+        // GESTIÓN DE OFICIOS Y MODALES
+        // ==========================================
+        window.openNewGestionModal = function() {
+            showGestionFormModal(null);
+        };
+
+        window.openEditGestionModal = function(id) {
+            const gestion = gestionesList.find(g => g.id === id);
+            if (gestion) showGestionFormModal(gestion);
+        };
+
+        function showGestionFormModal(gestion) {
+            const isEdit = !!gestion;
+            const modalHTML = `
+                <div id="gestionFormModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 overflow-y-auto">
+                    <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full p-6 border-t-4 border-ineGold max-h-[90vh] overflow-y-auto custom-scrollbar">
+                        <div class="flex items-center justify-between mb-4 pb-3 border-b border-gray-200">
+                            <div>
+                                <h3 class="text-base font-bold text-ineOxford">${isEdit ? 'Editar Gestión Institucional' : 'Registro de Nueva Gestión'}</h3>
+                                <p class="text-[11px] text-ineGray">35 Junta Distrital Ejecutiva del INE en el Estado de México</p>
+                            </div>
+                            <button onclick="closeGestionFormModal()" class="text-gray-400 hover:text-gray-700"><i class="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+
+                        <form onsubmit="saveGestionForm(event, '${isEdit ? gestion.id : ''}')" class="space-y-4 text-xs">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Tipo de Destinatario *</label>
+                                    <select id="formTipoDestinatario" required onchange="toggleEscuelaField(this.value)" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        <option value="Ayuntamiento" ${gestion && gestion.tipoDestinatario === 'Ayuntamiento' ? 'selected' : ''}>Ayuntamiento</option>
+                                        <option value="Escuela" ${gestion && gestion.tipoDestinatario === 'Escuela' ? 'selected' : ''}>Escuela / Plantel Educativo</option>
+                                        <option value="Institución" ${gestion && gestion.tipoDestinatario === 'Institución' ? 'selected' : ''}>Institución Pública / Privada</option>
+                                        <option value="Otro" ${gestion && gestion.tipoDestinatario === 'Otro' ? 'selected' : ''}>Otro</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Municipio (35 Distrito) *</label>
+                                    <select id="formMunicipio" required class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        ${MUNICIPIOS_INE_35.map(m => `<option value="${m}" ${gestion && gestion.municipio === m ? 'selected' : ''}>${m}</option>`).join('')}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div id="escuelaFieldsContainer" class="${gestion && gestion.tipoDestinatario === 'Escuela' ? '' : 'hidden'} grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 bg-ineLight rounded-xl border border-gray-200">
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Nombre de la Escuela</label>
+                                    <input type="text" id="formNombreEscuela" value="${gestion ? (gestion.nombreEscuela || '') : ''}" placeholder="ej. Primaria Benito Juárez" class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Clave CCT</label>
+                                    <input type="text" id="formCctEscuela" value="${gestion ? (gestion.cctEscuela || '') : ''}" placeholder="ej. 15EPR0000X" class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Número de Oficio INE *</label>
+                                    <input type="text" id="formNumOficio" required value="${gestion ? gestion.numOficio : 'INE/35JDE/MESA/' + Math.floor(100+Math.random()*900) + '/2026'}" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Fecha de Emisión *</label>
+                                    <input type="date" id="formFechaEmision" required value="${gestion ? gestion.fechaEmision : new Date().toISOString().split('T')[0]}" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Fecha de Recibido</label>
+                                    <input type="date" id="formFechaRecibido" value="${gestion ? (gestion.fechaRecibido || '') : ''}" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Destinatario (Cargo / Nombre) *</label>
+                                    <input type="text" id="formDestinatario" required value="${gestion ? gestion.destinatario : ''}" placeholder="ej. C. Presidente Municipal" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Persona que Entrega (Funcionario INE)</label>
+                                    <input type="text" id="formPersonaEntrega" value="${gestion ? gestion.personaEntrega : ''}" placeholder="ej. C. Roberto Gómez" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Tema de Gestión *</label>
+                                    <select id="formTemaGestion" required class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        <option value="Accesibilidad" ${gestion && gestion.temaGestion === 'Accesibilidad' ? 'selected' : ''}>Accesibilidad</option>
+                                        <option value="Mamparas y Bastidores" ${gestion && gestion.temaGestion === 'Mamparas y Bastidores' ? 'selected' : ''}>Mamparas y Bastidores</option>
+                                        <option value="Préstamo de Escuelas" ${gestion && gestion.temaGestion === 'Préstamo de Escuelas' ? 'selected' : ''}>Préstamo de Escuelas (Casillas)</option>
+                                        <option value="Seguridad Pública" ${gestion && gestion.temaGestion === 'Seguridad Pública' ? 'selected' : ''}>Seguridad Pública y Vialidad</option>
+                                        <option value="Difusión Institucional" ${gestion && gestion.temaGestion === 'Difusión Institucional' ? 'selected' : ''}>Difusión Institucional</option>
+                                        <option value="Otro" ${gestion && gestion.temaGestion === 'Otro' ? 'selected' : ''}>Otro</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block font-semibold text-gray-700 mb-1">Estatus del Trámite *</label>
+                                    <select id="formEstatus" required onchange="toggleEstatusFields(this.value)" class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        <option value="Iniciadas" ${gestion && gestion.estatus === 'Iniciadas' ? 'selected' : ''}>Iniciadas</option>
+                                        <option value="En trámite" ${gestion && gestion.estatus === 'En trámite' ? 'selected' : ''}>En trámite</option>
+                                        <option value="Concluidas" ${gestion && gestion.estatus === 'Concluidas' ? 'selected' : ''}>Concluidas</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block font-semibold text-gray-700 mb-1">Asunto / Descripción de la Solicitud *</label>
+                                <textarea id="formAsunto" required rows="2" placeholder="Detalle breve del oficio..." class="w-full p-2.5 bg-ineLight border border-gray-300 rounded-xl focus:ring-2 focus:ring-ineGold focus:outline-none">${gestion ? gestion.asunto : ''}</textarea>
+                            </div>
+
+                            <!-- Campo Dinámico para Seguimiento (Solo visible si estatus es En trámite) -->
+                            <div id="seguimientoTramiteContainer" class="${gestion && gestion.estatus === 'En trámite' ? '' : 'hidden'} p-4 bg-blue-50/60 rounded-xl border border-blue-200 space-y-2">
+                                <label class="block font-bold text-blue-900 text-xs flex items-center space-x-1.5">
+                                    <i class="fa-solid fa-timeline"></i>
+                                    <span>Seguimiento de la Gestión (En trámite)</span>
+                                </label>
+                                <textarea id="formSeguimientoTramite" rows="2" placeholder="Describa las acciones, llamadas o avances del trámite..." class="w-full p-2.5 bg-white border border-blue-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none">${gestion ? (gestion.seguimientoTramite || '') : ''}</textarea>
+                            </div>
+
+                            <!-- Checks y Sección de Respuesta -->
+                            <div class="p-4 bg-ineLight rounded-xl border border-gray-200 space-y-4">
+                                <div class="flex flex-wrap items-center gap-6 border-b border-gray-200 pb-3">
+                                    <label class="flex items-center space-x-2 cursor-pointer font-semibold text-gray-800">
+                                        <input type="checkbox" id="formTieneAcuse" ${gestion && gestion.tieneAcuse ? 'checked' : ''} class="w-4 h-4 text-ineOxford rounded border-gray-300 focus:ring-ineGold">
+                                        <span><i class="fa-solid fa-file-circle-check text-emerald-600 mr-1"></i> Cuenta con acuse de recibo</span>
+                                    </label>
+
+                                    <label class="flex items-center space-x-2 cursor-pointer font-semibold text-gray-800">
+                                        <input type="checkbox" id="formTieneRespuestaCheck" onchange="toggleRespuestaFields(this.checked)" ${gestion && gestion.tieneRespuesta ? 'checked' : ''} class="w-4 h-4 text-ineOxford rounded border-gray-300 focus:ring-ineGold">
+                                        <span><i class="fa-solid fa-reply-all text-blue-600 mr-1"></i> Cuenta con respuesta institucional</span>
+                                    </label>
+                                </div>
+
+                                <div id="respuestaDetailsContainer" class="${gestion && gestion.tieneRespuesta ? '' : 'hidden'} space-y-3 pt-1">
+                                    <h4 class="font-bold text-ineOxford text-xs uppercase tracking-wider">Datos de la Respuesta</h4>
+                                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                        <div>
+                                            <label class="block font-semibold text-gray-700 mb-1">No. Oficio de Respuesta</label>
+                                            <input type="text" id="formRespNumOficio" value="${gestion ? (gestion.respNumOficio || '') : ''}" placeholder="ej. OF-RESP-01" class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        </div>
+                                        <div>
+                                            <label class="block font-semibold text-gray-700 mb-1">Quién Emite la Respuesta</label>
+                                            <input type="text" id="formRespRemite" value="${gestion ? (gestion.respRemite || '') : ''}" placeholder="ej. Director de Obras" class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        </div>
+                                        <div>
+                                            <label class="block font-semibold text-gray-700 mb-1">Fecha de Respuesta</label>
+                                            <input type="date" id="formRespFecha" value="${gestion ? (gestion.respFecha || '') : ''}" class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block font-semibold text-gray-700 mb-1">Síntesis de la Respuesta</label>
+                                        <textarea id="formRespDescripcion" rows="2" placeholder="Resumen o acuerdos obtenidos en la respuesta..." class="w-full p-2 bg-white border border-gray-300 rounded-lg focus:ring-2 focus:ring-ineGold focus:outline-none">${gestion ? (gestion.respDescripcion || '') : ''}</textarea>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex justify-end space-x-3 pt-3 border-t border-gray-200">
+                                <button type="button" onclick="closeGestionFormModal()" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-xl font-bold transition-all">Cancelar</button>
+                                <button type="submit" class="px-5 py-2 bg-ineOxford hover:bg-black text-white rounded-xl font-bold shadow transition-all">Guardar Gestión</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            const div = document.createElement('div');
+            div.id = 'modalFormWrapper';
+            div.innerHTML = modalHTML;
+            document.body.appendChild(div);
+        }
+
+        window.closeGestionFormModal = function() {
+            const wrapper = document.getElementById('modalFormWrapper');
+            if (wrapper) wrapper.remove();
+        };
+
+        window.toggleEscuelaField = function(val) {
+            const container = document.getElementById('escuelaFieldsContainer');
+            if (val === 'Escuela') {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        };
+
+        window.toggleEstatusFields = function(val) {
+            const container = document.getElementById('seguimientoTramiteContainer');
+            if (val === 'En trámite') {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        };
+
+        window.toggleRespuestaFields = function(isChecked) {
+            const container = document.getElementById('respuestaDetailsContainer');
+            if (isChecked) {
+                container.classList.remove('hidden');
+            } else {
+                container.classList.add('hidden');
+            }
+        };
+
+        window.saveGestionForm = async function(event, editId) {
+            event.preventDefault();
+            const logged = JSON.parse(sessionStorage.getItem('ine35_logged_user') || '{}');
+
+            const estatusVal = document.getElementById('formEstatus').value;
+            const tieneRespuesta = document.getElementById('formTieneRespuestaCheck').checked;
+
+            const gestionObj = {
+                id: editId || 'gestion_' + Date.now(),
+                tipoDestinatario: document.getElementById('formTipoDestinatario').value,
+                municipio: document.getElementById('formMunicipio').value,
+                nombreEscuela: document.getElementById('formNombreEscuela') ? document.getElementById('formNombreEscuela').value : '',
+                cctEscuela: document.getElementById('formCctEscuela') ? document.getElementById('formCctEscuela').value : '',
+                numOficio: document.getElementById('formNumOficio').value.trim(),
+                fechaEmision: document.getElementById('formFechaEmision').value,
+                fechaRecibido: document.getElementById('formFechaRecibido').value,
+                destinatario: document.getElementById('formDestinatario').value.trim(),
+                personaEntrega: document.getElementById('formPersonaEntrega').value.trim(),
+                temaGestion: document.getElementById('formTemaGestion').value,
+                asunto: document.getElementById('formAsunto').value.trim(),
+                estatus: estatusVal,
+                seguimientoTramite: estatusVal === 'En trámite' ? (document.getElementById('formSeguimientoTramite') ? document.getElementById('formSeguimientoTramite').value.trim() : '') : '',
+                tieneAcuse: document.getElementById('formTieneAcuse').checked,
+                tieneRespuesta: tieneRespuesta,
+                respNumOficio: tieneRespuesta ? document.getElementById('formRespNumOficio').value.trim() : '',
+                respRemite: tieneRespuesta ? document.getElementById('formRespRemite').value.trim() : '',
+                respFecha: tieneRespuesta ? document.getElementById('formRespFecha').value : '',
+                respDescripcion: tieneRespuesta ? document.getElementById('formRespDescripcion').value.trim() : '',
+                capturistaNombre: logged.nombre || 'Funcionario INE',
+                capturistaEmail: logged.email || 'ine@ine35.mx',
+                fechaRegistro: editId ? (gestionesList.find(g => g.id === editId)?.fechaRegistro || new Date().toISOString()) : new Date().toISOString()
+            };
+
+            loadLocalFallback();
+            if (editId) {
+                const idx = gestionesList.findIndex(g => g.id === editId);
+                if (idx >= 0) gestionesList[idx] = gestionObj;
+            } else {
+                gestionesList.unshift(gestionObj);
+            }
+            localStorage.setItem('ine35_gestiones_backup', JSON.stringify(gestionesList));
+
+            if (db) {
+                try {
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gestiones_ine35', gestionObj.id), gestionObj);
+                } catch (e) {}
+            }
+
+            closeGestionFormModal();
+            showModal("Éxito", "La gestión institucional ha sido registrada correctamente.", "success");
+            renderDashboard();
+        };
+
+        window.confirmDeleteGestion = function(id) {
+            showModal("Confirmar Eliminación", "¿Está seguro de eliminar este registro de gestión? Esta acción no se puede deshacer.", "warning", async () => {
+                loadLocalFallback();
+                gestionesList = gestionesList.filter(g => g.id !== id);
+                localStorage.setItem('ine35_gestiones_backup', JSON.stringify(gestionesList));
+                if (db) {
+                    try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'gestiones_ine35', id)); } catch (e) {}
+                }
+                renderDashboard();
+                showModal("Eliminado", "El registro ha sido eliminado correctamente.", "success");
+            });
+        };
+
+        window.viewGestionDetail = function(id) {
+            const g = gestionesList.find(item => item.id === id);
+            if (!g) return;
+
+            let detalleSeguimiento = (g.estatus === 'En trámite' && g.seguimientoTramite) ? `
+--- SEGUIMIENTO DEL TRÁMITE ---
+${g.seguimientoTramite}
+            ` : '';
+
+            let detalleRespuesta = g.tieneRespuesta ? `
+--- RESPUESTA INSTITUCIONAL ---
+Oficio: ${g.respNumOficio || 'S/N'}
+Emite: ${g.respRemite || 'No especificado'}
+Fecha: ${g.respFecha || 'S/F'}
+Síntesis: ${g.respDescripcion || 'Sin síntesis'}
+            ` : '\nSin respuesta registrada aún.';
+
+            showModal(`Detalle de Oficio: ${g.numOficio}`, `
+Municipio: ${g.municipio}
+Tipo: ${g.tipoDestinatario} ${g.nombreEscuela ? '(' + g.nombreEscuela + ')' : ''}
+Destinatario: ${g.destinatario}
+Tema: ${g.temaGestion}
+Asunto: ${g.asunto}
+Estatus: ${g.estatus}
+Acuse de Recibo: ${g.tieneAcuse ? 'Sí' : 'No'}
+${detalleSeguimiento}
+${detalleRespuesta}
+            `, 'info');
+        };
+
+        window.exportDatabaseCSV = function() {
+            loadLocalFallback();
+            let csv = "ID,Oficio,FechaEmision,Municipio,TipoDestinatario,Escuela,Destinatario,Tema,Asunto,Estatus,SeguimientoTramite,Acuse,Respuesta,RespOficio,RespRemite,RespFecha,Sintesis,Capturista\n";
+            gestionesList.forEach(g => {
+                csv += `"${g.id}","${g.numOficio}","${g.fechaEmision}","${g.municipio}","${g.tipoDestinatario}","${g.nombreEscuela || ''}","${g.destinatario}","${g.temaGestion}","${g.asunto.replace(/"/g, '""')}","${g.estatus}","${(g.seguimientoTramite || '').replace(/"/g, '""')}","${g.tieneAcuse ? 'Sí' : 'No'}","${g.tieneRespuesta ? 'Sí' : 'No'}","${g.respNumOficio || ''}","${g.respRemite || ''}","${g.respFecha || ''}","${(g.respDescripcion || '').replace(/"/g, '""')}","${g.capturistaNombre}"\n`;
+            });
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Gestiones_INE_35_Distrito_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            showModal("Exportación Exitosa", "La base de datos completa de gestiones se ha exportado en formato CSV.", "success");
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initFirebase();
+            loadLocalFallback();
+            const logged = sessionStorage.getItem('ine35_logged_user');
+            if (logged && (JSON.parse(logged).email || JSON.parse(logged).loginId)) {
+                renderDashboard();
+            } else {
+                renderLogin();
+            }
+        });
+    </script>
+</body>
+</html>
